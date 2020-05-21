@@ -1,0 +1,154 @@
+---
+- name: Configure services
+  hosts: all
+  become: yes
+
+  vars:
+    percona_server_root_password: vagrant_root
+    percona_server_databases:
+      - { name: vagrant }
+    percona_server_users:
+      - { name: vagrant, password: vagrant, priv: "vagrant.*:ALL" }
+    percona_server_server_config:
+      performance_schema: "off"
+
+    nodejs_version: '12.x'
+
+    npm_packages:
+      - yarn
+
+    php_fpm_version: '7.3'
+    php_fpm_apt_packages:
+      - php{{php_fpm_version}}-fpm
+      - php{{php_fpm_version}}-cli
+      - php{{php_fpm_version}}-apcu
+      - php{{php_fpm_version}}-mysql
+      - php{{php_fpm_version}}-intl
+      - php{{php_fpm_version}}-curl
+      - php{{php_fpm_version}}-imagick
+      - php{{php_fpm_version}}-sqlite3
+      - php{{php_fpm_version}}-xml
+      - php{{php_fpm_version}}-zip
+      - php{{php_fpm_version}}-soap
+      - php{{php_fpm_version}}-gd
+      - php{{php_fpm_version}}-ldap
+      - php{{php_fpm_version}}-bcmath
+      - php{{php_fpm_version}}-mbstring
+      - php{{php_fpm_version}}-pgsql
+      - php{{php_fpm_version}}-tidy
+      - php{{php_fpm_version}}-phpdbg
+      - php-ast
+
+    php_fpm_pools:
+      - name: "default{{php_fpm_version}}"
+        user: vagrant
+        group: vagrant
+        listen: "/var/run/php/fpm-{{php_fpm_version}}.sock"
+        listen.owner: www-data
+        listen.group: www-data
+        listen.mode: "0660"
+        pm.max_spare_servers: "{{ ansible_processor_vcpus * 2 }}"
+        pm.max_children: "{{ ansible_processor_vcpus * 2 }}"
+
+    php_fpm_ini:
+      - option: "error_reporting"
+        section: "PHP"
+        value: "E_ALL"
+      - option: "display_errors"
+        section: "PHP"
+        value: "on"
+      - option: "display_startup_errors"
+        section: "PHP"
+        value: "on"
+      - option: "log_errors"
+        section: "PHP"
+        value: "On"
+      - option: "date.timezone"
+        section: "PHP"
+        value: "UTC"
+      - option: "post_max_size"
+        section: "PHP"
+        value: "11M"
+      - option: "upload_max_filesize"
+        section: "PHP"
+        value: "10M"
+      - option: "memory_limit"
+        section: "PHP"
+        value: "256M"
+
+    nginx_ubuntu_pkg:
+      - nginx
+
+    nginx_configs:
+      ssl:
+         - ssl_certificate_key "{{ ssl_certs_privkey_path }}"
+         - ssl_certificate     "{{ ssl_certs_cert_path }}"
+
+    nginx_sites_default_root: /app/public
+
+    nginx_http_params:
+      - client_max_body_size 11m
+    
+    nginx_sites:
+      default:
+        - listen 80 default_server
+        - listen 443 ssl http2
+        - server_name _
+        - root {{nginx_sites_default_root}}
+        - fastcgi_buffers 16 16k
+        - fastcgi_buffer_size 32k
+        -  location / { try_files $uri /app.php$is_args$args /index.php$is_args$args; }
+           location ~ ^/(app|app_dev|config|install|index)\.php(/|$) {
+           fastcgi_pass unix:/var/run/php/fpm-{{php_fpm_version}}.sock;
+           fastcgi_split_path_info ^(.+\.php)(/.*)$;
+           include fastcgi_params;
+           fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+         }
+
+  roles:
+    - jdauphant.ssl-certs
+    - jdauphant.nginx
+    - nbz4live.php-fpm
+    - dincho.percona-server
+
+  tasks:
+    - name: Set default PHP version to {{ php_fpm_version }}
+      command: >
+        update-alternatives --set php /usr/bin/php{{ php_fpm_version }}
+
+    - name: Set date.timezone for CLI
+      become: true
+      lineinfile:
+        dest: /etc/php/{{ php_fpm_version }}/cli/php.ini
+        regexp: "date.timezone ="
+        line: "date.timezone = UTC"
+
+    - name: Add NodeSource apt key
+      apt_key:
+        url: "https://deb.nodesource.com/gpgkey/nodesource.gpg.key"
+        state: present
+
+    - name: Add NodeSource repositories for Node.js
+      apt_repository:
+        repo: "{{ item }}"
+        state: present
+      with_items:
+        - "deb https://deb.nodesource.com/node_{{ nodejs_version }} {{ ansible_distribution_release }} main"
+        - "deb-src https://deb.nodesource.com/node_{{ nodejs_version }} {{ ansible_distribution_release }} main"
+      register: node_repo
+
+    - name: Update apt cache if repo was added
+      apt: update_cache=yes
+      when: node_repo.changed
+
+    - name: Install apt packages
+      apt: 
+        pkg:
+        - nodejs
+        - git
+        - make
+        - unzip
+
+    - name: Install npm packages
+      npm: name={{ item }} global=yes state=present
+      with_items: "{{ npm_packages }}"

@@ -1,0 +1,33 @@
+---
+- name: Install the application
+  hosts: all
+
+  vars:
+    project_path: /app
+    extra_path: ./vendor/bin
+    composer_github_oauth_token: "{{ composer_github_oauth }}"
+    composer_version: 1.10.6
+
+  roles:
+    - { role: geerlingguy.ansible-role-composer, become: true }
+
+  tasks:
+    - name: "Add {{ extra_path }} to path"
+      lineinfile:
+        dest: ~/.profile
+        state: present
+        backrefs: yes
+        regexp: '^PATH=(["]*)((?!.*?{{ extra_path }}).*?)(["]*)$'
+        line: 'PATH=\1\2:{{ extra_path }}\3'
+
+    - name: "Change dir to {{ project_path }} on login"
+      lineinfile:
+        dest: ~/.profile
+        state: present
+        line: 'cd {{ project_path }}'
+
+    - name: Install composer dependencies
+      command: >
+        {{ composer_path }} install --no-interaction
+      args:
+        chdir: "{{ project_path }}"
